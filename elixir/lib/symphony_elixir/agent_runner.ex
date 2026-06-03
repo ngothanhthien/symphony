@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.Claude.SessionStore
 
   @type worker_host :: String.t() | nil
 
@@ -121,9 +122,11 @@ defmodule SymphonyElixir.AgentRunner do
           :ok
 
         {:done, _refreshed_issue} ->
+          maybe_clear_claude_session(workspace)
           :ok
 
         {:error, reason} ->
+          maybe_clear_claude_session(workspace)
           {:error, reason}
       end
     end
@@ -207,4 +210,14 @@ defmodule SymphonyElixir.AgentRunner do
       other -> raise ArgumentError, "Unknown agent transport: #{inspect(other)}"
     end
   end
+
+  # Wipe the on-disk Claude session id for this workspace. Only meaningful when
+  # the active transport is Claude; for Codex this is a no-op (we never write
+  # the file in the first place). The file lookup is safe even if it doesn't
+  # exist — `SessionStore.clear/1` swallows `:enoent`.
+  defp maybe_clear_claude_session(workspace) when is_binary(workspace) do
+    SessionStore.clear(workspace)
+  end
+
+  defp maybe_clear_claude_session(_), do: :ok
 end

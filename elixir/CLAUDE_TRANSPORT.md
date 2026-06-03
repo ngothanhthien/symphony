@@ -29,10 +29,6 @@ unchanged.
 - **No fine-grained approval flow.** Claude CLI's `--permission-mode` is
   all-or-nothing. If you need a non-`bypassPermissions` mode, fork the
   transport and add it.
-- **No native streaming of partial tool input.** We collect
-  `input_json_delta` events but don't yet re-inject tool results into the
-  Claude stream (out of scope for the MVP — the agent drives tool calls via
-  Bash, not in-stream).
 - **No codex transport.** This branch keeps the codex code in tree for
   reference but does not exercise it. To run with Codex instead, check out
   `main`.
@@ -120,6 +116,43 @@ network.** Mitigations:
 - Audit the workspace contents before letting agents run.
 - The Bash helpers never accept stdin; they only do what their args say.
 
+## Session persistence and resume
+
+The Claude transport persists the session id to
+`<workspace>/.symphony/claude-session.json` after `start_session` succeeds.
+If the orchestrator crashes (or is restarted) before the issue reaches a
+terminal state, the next `start_session` call for the same workspace will
+spawn `claude -p --resume <id>` instead of `--session-id <new>`, so the
+agent picks up where it left off instead of losing all context.
+
+The on-disk file is wiped by `AgentRunner` when the issue reaches a terminal
+state (Done / Cancelled / etc.) or when the orchestrator returns an error,
+so a fresh run on the same workspace always starts a fresh session.
+
+### Verified behaviour
+
+A smoke test (see git history for the script) confirmed that with the
+session id persisted on disk:
+
+1. Turn 1: `claude -p --session-id <uuid>` is told "remember BERYLLIUM",
+   replies "ok".
+2. The `claude` process exits, then a **new** process is spawned as
+   `claude -p --resume <uuid>`.
+3. Turn 2 in the new process is asked "what's the secret word?" and answers
+   "**The secret word is BERYLLIUM.**"
+
+The session store is at `<workspace>/.symphony/claude-session.json` and has
+this shape:
+
+```json
+{
+  "version": 1,
+  "thread_id": "<uuid>",
+  "created_at": "<iso8601>",
+  "last_seen_at": "<iso8601>"
+}
+```
+
 ## Running
 
 ```bash
@@ -134,23 +167,24 @@ The `--i-understand-...` flag is the same one the Codex transport requires.
 
 | Path | Purpose |
 |---|---|
-| `elixir/lib/symphony_elixir/claude/sandbox.ex` | Builds the `claude -p` argv. |
-| `elixir/lib/symphony_elixir/claude/session.ex` | Per-turn state (port, session id, tool-use tracking). |
+| `elixir/lib/symphony_elixir/claude/sandbox.ex` | Builds the `claude -p` argv (incl. `--resume` vs `--session-id`). |
+| `elixir/lib/symphony_elixir/claude/session.ex` | Per-turn state (port, session id, tool-use tracking, resume flag). |
+| `elixir/lib/symphony_elixir/claude/session_store.ex` | Read/write `<workspace>/.symphony/claude-session.json` atomically. |
 | `elixir/lib/symphony_elixir/claude/stream.ex` | Line-buffered JSON stream reader. |
 | `elixir/lib/symphony_elixir/claude/app_server.ex` | Public API (start_session, run_turn, stop_session, run). |
-| `elixir/lib/symphony_elixir/agent_runner.ex` | Picks `Codex.AppServer` or `Claude.AppServer` based on `agent.transport`. |
+| `elixir/lib/symphony_elixir/agent_runner.ex` | Picks `Codex.AppServer` or `Claude.AppServer` based on `agent.transport`. Wipes Claude session store on terminal/error. |
 | `elixir/lib/symphony_elixir/config/schema.ex` | New `agent.transport` field + `claude` schema block. |
 | `bin/symphony-claude-tools/linear-*` | Bash helpers the agent calls. |
 
 ## Limitations and known issues
 
-- **Resume across orchestrator restarts is not implemented.** A Claude session
-  id is generated per `start_session` call; if Symphony restarts mid-issue the
-  session is lost. To add resume, persist the session id in the workspace
-  metadata and pass it back via `--session-id` on the next start.
 - **The dashboard's "Codex" terminology is unchanged.** It will say
   `codex_app_server_pid` and `codex_worker_update` for Claude sessions too.
   A follow-up can rename these in the dashboard presenter.
 - **Approval flow is `bypassPermissions` only.** If you want a non-bypass
   mode, you can spawn a second transport in a separate worktree — the
   current `claude.ex` does not accept a mode override.
+- **Resume only works if the workspace directory is preserved.** If
+  `workspace.before_remove` runs before resume, the session id is gone.
+  The current `agent_runner` does call `SessionStore.clear/1` on terminal
+  state, so resume is only useful mid-issue.

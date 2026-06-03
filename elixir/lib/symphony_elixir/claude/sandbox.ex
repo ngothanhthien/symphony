@@ -23,6 +23,8 @@ defmodule SymphonyElixir.Claude.Sandbox do
     claude_settings = settings.claude
 
     with {:ok, binary} <- resolve_binary(claude_settings.command) do
+      session_flag = session_flag(opts)
+
       args =
         [
           "-p",
@@ -34,11 +36,10 @@ defmodule SymphonyElixir.Claude.Sandbox do
           "--bare",
           "--permission-mode", "bypassPermissions"
         ]
+        |> Kernel.++(session_flag)
         |> append_optional("--model", claude_settings.model)
         |> append_optional("--add-dir", workspace)
         |> append_add_dirs(claude_settings.add_dirs)
-        |> append_optional("--session-id", Keyword.get(opts, :session_id))
-        |> List.flatten()
 
       spec = %{
         binary: binary,
@@ -48,6 +49,20 @@ defmodule SymphonyElixir.Claude.Sandbox do
       }
 
       {:ok, spec}
+    end
+  end
+
+  # `opts` may carry `:resume` (continue an existing session) or `:session_id`
+  # (force a specific id). If both are absent we omit the flag entirely and
+  # let `claude` pick its own id. `:resume` takes precedence over `:session_id`.
+  defp session_flag(opts) do
+    case Keyword.get(opts, :resume) do
+      id when is_binary(id) and id != "" -> ["--resume", id]
+      _ ->
+        case Keyword.get(opts, :session_id) do
+          id when is_binary(id) and id != "" -> ["--session-id", id]
+          _ -> []
+        end
     end
   end
 

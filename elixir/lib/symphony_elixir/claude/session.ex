@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Claude.Session do
   streamed events back to a turn.
   """
 
-  alias SymphonyElixir.Claude.Sandbox
+  alias SymphonyElixir.Claude.{Sandbox, SessionStore}
 
   @type t :: %__MODULE__{
           port: port() | nil,
@@ -20,7 +20,8 @@ defmodule SymphonyElixir.Claude.Session do
           turn_sandbox_policy: map(),
           metadata: map(),
           pending_tool_uses: %{optional(String.t()) => map()},
-          turn_id: String.t() | nil
+          turn_id: String.t() | nil,
+          resumed: boolean()
         }
 
   @enforce_keys [:thread_id, :workspace, :approval_policy, :auto_approve_requests]
@@ -35,20 +36,24 @@ defmodule SymphonyElixir.Claude.Session do
     :turn_sandbox_policy,
     :metadata,
     pending_tool_uses: %{},
-    turn_id: nil
+    turn_id: nil,
+    resumed: false
   ]
 
   @spec new(Path.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def new(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
-    thread_id = Keyword.get(opts, :session_id, generate_session_id())
+    force_new = Keyword.get(opts, :force_new, false)
 
-    with {:ok, spec} <- Sandbox.build(workspace, session_id: thread_id) do
+    {thread_id, resumed} = resolve_thread_id(workspace, force_new, opts)
+
+    with {:ok, spec} <- Sandbox.build(workspace, build_sandbox_opts(thread_id, resumed, opts)) do
       port = open_port(spec)
 
       metadata =
         base_metadata(port, worker_host)
         |> Map.put(:claude_session_id, thread_id)
+        |> maybe_put_resumed(resumed)
 
       session = %__MODULE__{
         port: port,
@@ -59,12 +64,49 @@ defmodule SymphonyElixir.Claude.Session do
         auto_approve_requests: true,
         thread_sandbox: :workspace_write,
         turn_sandbox_policy: %{},
-        metadata: metadata
+        metadata: metadata,
+        resumed: resumed
       }
+
+      # Persist the session id immediately so a crash before the first turn
+      # completes still leaves a recoverable handle.
+      case resumed do
+        true -> SessionStore.touch(workspace, thread_id)
+        false -> SessionStore.write(workspace, thread_id)
+      end
 
       {:ok, session}
     end
   end
+
+  # --- internals -----------------------------------------------------------
+
+  # If the caller passed a :session_id explicitly, honor it (used by tests
+  # and by callers that own the id themselves). Otherwise check the on-disk
+  # store; if a previous run left one, resume it. Otherwise mint a new one.
+  defp resolve_thread_id(workspace, force_new, opts) do
+    explicit = Keyword.get(opts, :session_id)
+
+    cond do
+      is_binary(explicit) and explicit != "" ->
+        {explicit, Keyword.get(opts, :resumed, false)}
+
+      force_new ->
+        {generate_session_id(), false}
+
+      true ->
+        case SessionStore.read(workspace) do
+          %{thread_id: id} -> {id, true}
+          nil -> {generate_session_id(), false}
+        end
+    end
+  end
+
+  defp build_sandbox_opts(thread_id, true, _opts), do: [resume: thread_id]
+  defp build_sandbox_opts(thread_id, false, _opts), do: [session_id: thread_id]
+
+  defp maybe_put_resumed(metadata, true), do: Map.put(metadata, :claude_session_resumed, true)
+  defp maybe_put_resumed(metadata, false), do: metadata
 
   defp open_port(%{binary: binary, args: args, env: env, cd: cd}) do
     Port.open(

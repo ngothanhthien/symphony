@@ -1,10 +1,11 @@
 defmodule SymphonyElixir.AgentRunner do
   @moduledoc """
-  Executes a single Linear issue in its workspace with Codex.
+  Executes a single Linear issue in its workspace with Claude.
   """
 
   require Logger
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.Claude.AppServer
   alias SymphonyElixir.Claude.SessionStore
 
   @type worker_host :: String.t() | nil
@@ -80,20 +81,20 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
-    with {:ok, session} <- transport_module().start_session(workspace, worker_host: worker_host) do
+    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
       try do
-        do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
+        do_run_claude_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
       after
-        transport_module().stop_session(session)
+        AppServer.stop_session(session)
       end
     end
   end
 
-  defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+  defp do_run_claude_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
     with {:ok, turn_session} <-
-           transport_module().run_turn(
+           AppServer.run_turn(
              app_session,
              prompt,
              issue,
@@ -105,7 +106,7 @@ defmodule SymphonyElixir.AgentRunner do
         {:continue, refreshed_issue} when turn_number < max_turns ->
           Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
-          do_run_codex_turns(
+          do_run_claude_turns(
             app_session,
             workspace,
             refreshed_issue,
@@ -203,18 +204,8 @@ defmodule SymphonyElixir.AgentRunner do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
 
-  defp transport_module do
-    case Config.settings!().agent.transport do
-      "claude" -> SymphonyElixir.Claude.AppServer
-      "codex" -> SymphonyElixir.Codex.AppServer
-      other -> raise ArgumentError, "Unknown agent transport: #{inspect(other)}"
-    end
-  end
-
-  # Wipe the on-disk Claude session id for this workspace. Only meaningful when
-  # the active transport is Claude; for Codex this is a no-op (we never write
-  # the file in the first place). The file lookup is safe even if it doesn't
-  # exist — `SessionStore.clear/1` swallows `:enoent`.
+  # Wipe the on-disk Claude session id for this workspace. The file lookup is
+  # safe even if it doesn't exist — `SessionStore.clear/1` swallows `:enoent`.
   defp maybe_clear_claude_session(workspace) when is_binary(workspace) do
     SessionStore.clear(workspace)
   end

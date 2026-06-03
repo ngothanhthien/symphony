@@ -1,0 +1,22 @@
+# Local secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Build artifacts (Elixir)
+elixir/_build/
+elixir/deps/
+elixir/.mix/
+elixir/log/
+elixir/cover/
+*.beam
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Runtime state from Symphony
+log/
+workspaces/

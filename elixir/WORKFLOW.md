@@ -1,7 +1,8 @@
 ---
 tracker:
   kind: linear
-  project_slug: "symphony-0c79b11b75ea"
+  project_slug: "fee6284555ff"
+  api_key: $LINEAR_API_KEY
   active_states:
     - Todo
     - In Progress
@@ -28,13 +29,12 @@ hooks:
 agent:
   max_concurrent_agents: 10
   max_turns: 20
-codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
-  approval_policy: never
-  thread_sandbox: workspace-write
-  turn_sandbox_policy:
-    type: workspaceWrite
-    networkAccess: true
+claude:
+  command: claude -p --output-format stream-json --permission-mode bypassPermissions
+  model: sonnet
+  turn_timeout_ms: 1800000
+  permission_mode: bypassPermissions
+  mcp_servers: []
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`

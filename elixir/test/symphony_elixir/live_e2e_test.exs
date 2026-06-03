@@ -493,7 +493,6 @@ defmodule SymphonyElixir.LiveE2ETest do
         claude_command: worker_setup.claude_command,
         claude_approval_policy: "never",
         claude_turn_timeout_ms: 600_000,
-        claude_stall_timeout_ms: 600_000,
         observability_enabled: false,
         prompt: live_prompt(project["slugId"])
       )

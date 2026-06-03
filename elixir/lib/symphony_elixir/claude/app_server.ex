@@ -1,11 +1,9 @@
 defmodule SymphonyElixir.Claude.AppServer do
   @moduledoc """
-  Drop-in alternative to `SymphonyElixir.Codex.AppServer` that talks to the
-  Claude Code CLI (`claude -p --output-format stream-json`) over stdio.
+  Symphony transport that talks to the Claude Code CLI
+  (`claude -p --output-format stream-json`) over stdio.
 
-  The public API mirrors Codex's: `start_session/2`, `run_turn/4`,
-  `stop_session/1`, `run/4`. The orchestrator picks one or the other based on
-  the `agent.transport` workflow setting.
+  Public API: `start_session/2`, `run_turn/4`, `stop_session/1`, `run/4`.
   """
 
   require Logger

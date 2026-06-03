@@ -2,9 +2,9 @@ defmodule SymphonyElixir.Claude.Sandbox do
   @moduledoc """
   Builds the `claude -p` command-line for a Symphony Claude transport session.
 
-  Mirrors `SymphonyElixir.Codex.AppServer`'s view of the world so that the rest
-  of Symphony (orchestrator, agent runner, dashboard) can treat a Claude session
-  as a drop-in alternative to a Codex app-server session.
+  Mirrors the public API of the previous Codex transport so the rest of
+  Symphony (orchestrator, agent runner, dashboard) can treat a Claude session
+  as a drop-in alternative.
   """
 
   require Logger

@@ -375,7 +375,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_id" => "issue-blocked",
                  "issue_identifier" => "MT-BLOCKED",
                  "state" => "In Progress",
-                 "error" => "codex turn requires operator input",
+                 "error" => "claude turn requires operator input",
                  "worker_host" => "dm-dev2",
                  "workspace_path" => "/workspaces/MT-BLOCKED",
                  "session_id" => "thread-blocked",
@@ -385,7 +385,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_event_at" => state_payload["blocked"] |> List.first() |> Map.fetch!("last_event_at")
                }
              ],
-             "codex_totals" => %{
+             "claude_totals" => %{
                "input_tokens" => 4,
                "output_tokens" => 8,
                "total_tokens" => 12,
@@ -420,7 +420,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              },
              "retry" => nil,
              "blocked" => nil,
-             "logs" => %{"codex_session_logs" => []},
+             "logs" => %{"claude_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{}
@@ -435,11 +435,11 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert %{
              "status" => "blocked",
-             "last_error" => "codex turn requires operator input",
+             "last_error" => "claude turn requires operator input",
              "blocked" => %{
                "session_id" => "thread-blocked",
                "state" => "In Progress",
-               "error" => "codex turn requires operator input"
+               "error" => "claude turn requires operator input"
              }
            } = json_response(conn, 200)
 
@@ -577,7 +577,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Live"
     assert html =~ "Offline"
     assert html =~ "Copy ID"
-    assert html =~ "Codex update"
+    assert html =~ "Claude update"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
@@ -593,12 +593,12 @@ defmodule SymphonyElixir.ExtensionsTest do
           state: "In Progress",
           session_id: "thread-http",
           turn_count: 8,
-          last_codex_event: :notification,
-          last_codex_message: %{
+          last_claude_event: :notification,
+          last_claude_message: %{
             event: :notification,
             message: %{
               payload: %{
-                "method" => "codex/event/agent_message_content_delta",
+                "method" => "claude/event/agent_message_content_delta",
                 "params" => %{
                   "msg" => %{
                     "content" => "structured update"
@@ -607,10 +607,10 @@ defmodule SymphonyElixir.ExtensionsTest do
               }
             }
           },
-          last_codex_timestamp: DateTime.utc_now(),
-          codex_input_tokens: 10,
-          codex_output_tokens: 12,
-          codex_total_tokens: 22,
+          last_claude_timestamp: DateTime.utc_now(),
+          claude_input_tokens: 10,
+          claude_output_tokens: 12,
+          claude_total_tokens: 22,
           started_at: DateTime.utc_now()
         }
       ])
@@ -722,13 +722,13 @@ defmodule SymphonyElixir.ExtensionsTest do
           state: "In Progress",
           session_id: "thread-http",
           turn_count: 7,
-          codex_app_server_pid: nil,
-          last_codex_message: "rendered",
-          last_codex_timestamp: nil,
-          last_codex_event: :notification,
-          codex_input_tokens: 4,
-          codex_output_tokens: 8,
-          codex_total_tokens: 12,
+          claude_app_server_pid: nil,
+          last_claude_message: "rendered",
+          last_claude_timestamp: nil,
+          last_claude_event: :notification,
+          claude_input_tokens: 4,
+          claude_output_tokens: 8,
+          claude_total_tokens: 12,
           started_at: DateTime.utc_now()
         }
       ],
@@ -746,21 +746,21 @@ defmodule SymphonyElixir.ExtensionsTest do
           issue_id: "issue-blocked",
           identifier: "MT-BLOCKED",
           state: "In Progress",
-          error: "codex turn requires operator input",
+          error: "claude turn requires operator input",
           worker_host: "dm-dev2",
           workspace_path: "/workspaces/MT-BLOCKED",
           session_id: "thread-blocked",
           blocked_at: DateTime.utc_now(),
-          last_codex_event: :turn_input_required,
-          last_codex_message: %{
+          last_claude_event: :turn_input_required,
+          last_claude_message: %{
             event: :turn_input_required,
             message: %{"method" => "turn/input_required"},
             timestamp: DateTime.utc_now()
           },
-          last_codex_timestamp: DateTime.utc_now()
+          last_claude_timestamp: DateTime.utc_now()
         }
       ],
-      codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
+      claude_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end

@@ -2,10 +2,9 @@ defmodule SymphonyElixir.Claude.Stream do
   @moduledoc """
   Line-buffered JSON stream reader for the Claude CLI (`-p` + `stream-json`).
 
-  Mirrors the pattern used by `SymphonyElixir.Codex.AppServer` to drain a port:
-  accumulate partial lines, parse one JSON object per line, and dispatch to a
-  caller-supplied callback. Malformed lines are logged and dropped (Claude can
-  emit non-JSON chatter on stdout/stderr).
+  Accumulates partial lines, parses one JSON object per line, and dispatches
+  to a caller-supplied callback. Malformed lines are logged and dropped (the
+  CLI can emit non-JSON chatter on stdout/stderr).
   """
 
   require Logger

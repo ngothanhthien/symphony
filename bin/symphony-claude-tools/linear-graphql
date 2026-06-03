@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# linear-graphql — Execute a raw GraphQL query or mutation against Linear.
+#
+# Usage:
+#   linear-graphql --query "<GraphQL string>" [--vars '<json object>']
+#
+# Output:
+#   On success: JSON object (the `data` field of the Linear response) on stdout.
+#   On failure: Human-readable error message on stderr; non-zero exit code.
+#
+# Exit codes:
+#   0 — success
+#   2 — invalid arguments
+#   3 — LINEAR_API_KEY missing
+#   4 — request failed before a Linear response
+#   5 — Linear returned one or more GraphQL errors
+#
+# Environment:
+#   LINEAR_API_KEY        — required. Personal API token (linapi_...).
+#   LINEAR_API_URL        — optional. Override the GraphQL endpoint.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: linear-graphql --query "<GraphQL>" [--vars '<json>']
+
+Execute a GraphQL query or mutation against the Linear API.
+
+Options:
+  --query <text>   GraphQL document (required).
+  --vars  <json>   Variables as a JSON object (optional, default: {}).
+  --help           Show this help.
+
+Exit codes:
+  0  success
+  2  invalid arguments
+  3  LINEAR_API_KEY missing
+  4  network/transport error
+  5  GraphQL errors
+EOF
+}
+
+query=""
+vars='{}'
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --query) query="${2:-}"; shift 2 ;;
+    --vars)  vars="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "${LINEAR_API_KEY:-}" ]]; then
+  echo "LINEAR_API_KEY is not set. Export it or provide it in WORKFLOW.md." >&2
+  exit 3
+fi
+
+if [[ -z "$query" ]]; then
+  echo "--query is required." >&2
+  usage >&2
+  exit 2
+fi
+
+# Validate --vars is a JSON object.
+if ! echo "$vars" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  echo "--vars must be a JSON object." >&2
+  exit 2
+fi
+
+api_url="${LINEAR_API_URL:-https://api.linear.app/graphql}"
+
+# Build the request body.
+payload=$(jq -n \
+  --arg q "$query" \
+  --argjson v "$vars" \
+  '{query: $q, variables: $v}')
+
+# Send the request. Use --fail-with-body so a non-2xx response is captured,
+# not silently dropped. -m caps runtime in case Linear hangs.
+http_response=$(mktemp)
+trap 'rm -f "$http_response"' EXIT
+
+http_status=$(curl -sS \
+  -m 30 \
+  -o "$http_response" \
+  -w '%{http_code}' \
+  -X POST "$api_url" \
+  -H "Authorization: ${LINEAR_API_KEY}" \
+  -H "Content-Type: application/json" \
+  --data-binary "$payload" || echo "000")
+
+if [[ "$http_status" != "200" && "$http_status" != "201" ]]; then
+  echo "Linear API request failed with HTTP $http_status:" >&2
+  cat "$http_response" >&2
+  exit 4
+fi
+
+# Linear returned 200. Check for GraphQL errors.
+if jq -e 'has("errors") and (.errors | length > 0)' "$http_response" >/dev/null 2>&1; then
+  echo "Linear GraphQL errors:" >&2
+  jq '.errors' "$http_response" >&2
+  exit 5
+fi
+
+# Success — print the `data` object (or the whole response if no `data`).
+if jq -e 'has("data")' "$http_response" >/dev/null 2>&1; then
+  jq '.data' "$http_response"
+else
+  cat "$http_response"
+fi

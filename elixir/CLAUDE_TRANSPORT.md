@@ -1,0 +1,156 @@
+# Claude Code Transport
+
+This fork replaces the Codex app-server transport in [openai/symphony][upstream]
+with a [Claude Code CLI][claude-cli] transport. Everything else — the
+orchestrator, Linear polling, the workspace lifecycle, the dashboard — is
+unchanged.
+
+[upstream]: https://github.com/openai/symphony
+[claude-cli]: https://code.claude.com/docs/en/agent-sdk
+
+## What works
+
+- `start_session` / `run_turn` / `stop_session` API matches `Codex.AppServer`
+  byte-for-byte, so the orchestrator and dashboard work without changes.
+- The Claude session is launched in non-interactive mode
+  (`claude -p --output-format stream-json --input-format stream-json`).
+- Always runs with `--permission-mode bypassPermissions`. Do not point this at
+  an untrusted workspace.
+- The Claude session id is generated up-front and passed to `claude` via
+  `--session-id`, so it can be resumed across turns with `-r`.
+- Tool calls are emitted as plain Bash invocations against helper scripts in
+  `bin/symphony-claude-tools/` — see [Helpers](#helpers) below.
+
+## What does NOT work (yet)
+
+- **No MCP dynamic tools.** The Codex `linear_graphql` dynamic tool has been
+  replaced by helper scripts the agent invokes via Bash. There is no automatic
+  schema-driven tool registration.
+- **No fine-grained approval flow.** Claude CLI's `--permission-mode` is
+  all-or-nothing. If you need a non-`bypassPermissions` mode, fork the
+  transport and add it.
+- **No native streaming of partial tool input.** We collect
+  `input_json_delta` events but don't yet re-inject tool results into the
+  Claude stream (out of scope for the MVP — the agent drives tool calls via
+  Bash, not in-stream).
+- **No codex transport.** This branch keeps the codex code in tree for
+  reference but does not exercise it. To run with Codex instead, check out
+  `main`.
+
+## Configuration
+
+Add an `agent.transport: claude` field and a `claude:` block to your
+`WORKFLOW.md`:
+
+```yaml
+tracker:
+  kind: linear
+  project_slug: "your-project"
+  api_key: $LINEAR_API_KEY
+  active_states: [Todo, "In Progress"]
+  terminal_states: [Done, Cancelled]
+
+agent:
+  transport: claude            # required
+  max_concurrent_agents: 5
+  max_turns: 10
+
+claude:
+  command: claude              # path to the `claude` binary
+  model: sonnet                # optional; omit to use Claude Code default
+  add_dirs: ["."]              # extra --add-dir values (in addition to the
+                               # per-turn workspace)
+  turn_timeout_ms: 3600000     # how long to wait for one turn to complete
+
+workspace:
+  root: ~/code/symphony-workspaces
+```
+
+### Field reference
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `agent.transport` | `"codex"` \| `"claude"` | `"codex"` | The orchestrator switches on this. |
+| `claude.command` | string | `"claude"` | Must be on `PATH` (or absolute path). |
+| `claude.model` | string | (CLI default) | e.g. `sonnet`, `opus`. |
+| `claude.add_dirs` | list of strings | `[]` | Extra `--add-dir` flags. The per-turn workspace is always added automatically. |
+| `claude.turn_timeout_ms` | integer | `3600000` | One hour. |
+
+## Helpers
+
+`bin/symphony-claude-tools/` contains three thin Bash wrappers that the agent
+is told (via the system prompt) to call when it needs to touch Linear. They
+all use `jq` + `curl` and have no extra runtime dependencies.
+
+| Script | Purpose |
+|---|---|
+| `linear-graphql --query "<QL>" [--vars '<json>']` | Run a raw GraphQL query/mutation. Prints the `data` field as JSON. |
+| `linear-update-issue --id <uuid> [--state <name>] [--assignee <user>] [--title <text>]` | Update an issue. Resolves state names to ids automatically. |
+| `linear-add-comment --id <uuid> --body "<text>"` | Post a comment. |
+
+Exit codes: `0` success, `2` bad args, `3` missing `LINEAR_API_KEY`, `4`
+network/HTTP error, `5` GraphQL errors. The agent is expected to inspect
+`$?` and `stderr`.
+
+To tell the agent about these helpers, add a section to your `WORKFLOW.md`
+prompt body. For example:
+
+```markdown
+## Available CLI helpers
+
+When you need to touch Linear, call one of these from Bash:
+
+- `bin/symphony-claude-tools/linear-graphql --query "..."`
+- `bin/symphony-claude-tools/linear-update-issue --id <uuid> --state "Done"`
+- `bin/symphony-claude-tools/linear-add-comment --id <uuid> --body "..."`
+
+The `bin/symphony-claude-tools/` directory is on `$PATH` (it's `cwd` for
+each turn) and all scripts respect `LINEAR_API_KEY`.
+```
+
+## Security
+
+**`--permission-mode bypassPermissions` means the agent can run any Bash
+command, read or write any file under `--add-dir`, and exfiltrate to the
+network.** Mitigations:
+
+- Always pass `--add-dir` set to the per-turn workspace, not the host repo.
+  Symphony does this automatically via `Claude.Sandbox`.
+- Run Symphony in a dedicated user account or container.
+- Audit the workspace contents before letting agents run.
+- The Bash helpers never accept stdin; they only do what their args say.
+
+## Running
+
+```bash
+export LINEAR_API_KEY=linapi_...
+mise exec -- ./bin/symphony ./WORKFLOW.md \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails
+```
+
+The `--i-understand-...` flag is the same one the Codex transport requires.
+
+## Files
+
+| Path | Purpose |
+|---|---|
+| `elixir/lib/symphony_elixir/claude/sandbox.ex` | Builds the `claude -p` argv. |
+| `elixir/lib/symphony_elixir/claude/session.ex` | Per-turn state (port, session id, tool-use tracking). |
+| `elixir/lib/symphony_elixir/claude/stream.ex` | Line-buffered JSON stream reader. |
+| `elixir/lib/symphony_elixir/claude/app_server.ex` | Public API (start_session, run_turn, stop_session, run). |
+| `elixir/lib/symphony_elixir/agent_runner.ex` | Picks `Codex.AppServer` or `Claude.AppServer` based on `agent.transport`. |
+| `elixir/lib/symphony_elixir/config/schema.ex` | New `agent.transport` field + `claude` schema block. |
+| `bin/symphony-claude-tools/linear-*` | Bash helpers the agent calls. |
+
+## Limitations and known issues
+
+- **Resume across orchestrator restarts is not implemented.** A Claude session
+  id is generated per `start_session` call; if Symphony restarts mid-issue the
+  session is lost. To add resume, persist the session id in the workspace
+  metadata and pass it back via `--session-id` on the next start.
+- **The dashboard's "Codex" terminology is unchanged.** It will say
+  `codex_app_server_pid` and `codex_worker_update` for Claude sessions too.
+  A follow-up can rename these in the dashboard presenter.
+- **Approval flow is `bypassPermissions` only.** If you want a non-bypass
+  mode, you can spawn a second transport in a separate worktree — the
+  current `claude.ex` does not accept a mode override.

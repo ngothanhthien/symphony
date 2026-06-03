@@ -10,6 +10,11 @@ _In this [demo video](https://player.vimeo.com/video/1186371009?h=5626e4b899), S
 > [!WARNING]
 > Symphony is a low-key engineering preview for testing in trusted environments.
 
+> [!NOTE]
+> This is a fork of [openai/symphony](https://github.com/openai/symphony) that replaces the
+> Codex transport with a **Claude Code** transport. See
+> [elixir/CLAUDE_TRANSPORT.md](elixir/CLAUDE_TRANSPORT.md) for details.
+
 ## Running Symphony
 
 ### Requirements

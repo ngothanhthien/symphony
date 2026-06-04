@@ -141,8 +141,9 @@ defmodule SymphonyElixir.AgentRunner do
 
     - The previous Claude turn completed normally, but the Linear issue is still in an active state.
     - This is continuation turn ##{turn_number} of #{max_turns} for the current agent run.
-    - Resume from the current workspace and workpad state instead of restarting from scratch.
+    - Resume from the current workspace and Harness state instead of restarting from scratch.
     - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
+    - Do not edit Linear directly. Use `scripts/bin/harness-cli` for any tracking, workpad, proof, trace, or status write.
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
     """
   end

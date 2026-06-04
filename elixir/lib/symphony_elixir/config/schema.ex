@@ -161,14 +161,29 @@ defmodule SymphonyElixir.Config.Schema do
       field(:model, :string)
       field(:add_dirs, {:array, :string}, default: [])
       field(:turn_timeout_ms, :integer, default: 3_600_000)
+
+      # Policy contract: Symphony is read-only. `expose_linear_api_key`
+      # is therefore always false at the config layer. The field is
+      # declared so workflow YAML can express the intent explicitly,
+      # and the changeset below rejects `true` as an invariant
+      # violation — turning the policy into a hard validation error
+      # rather than a silent no-op.
+      field(:expose_linear_api_key, :boolean, default: false)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:command, :model, :add_dirs, :turn_timeout_ms], empty_values: [])
+      |> cast(attrs, [:command, :model, :add_dirs, :turn_timeout_ms, :expose_linear_api_key], empty_values: [])
       |> validate_required([:command])
       |> validate_number(:turn_timeout_ms, greater_than: 0)
+      |> validate_change(:expose_linear_api_key, fn
+        :expose_linear_api_key, true ->
+          [expose_linear_api_key: "must be false; Symphony is read-only and never passes the Linear token to Claude"]
+
+        _, _ ->
+          []
+      end)
     end
   end
 
@@ -311,6 +326,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
+    |> cast_embed(:claude, with: &Claude.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)

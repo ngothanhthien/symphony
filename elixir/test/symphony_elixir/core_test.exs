@@ -955,7 +955,6 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt == "Retry #2"
   end
 
-
   test "agent runner surfaces ssh startup failures instead of silently hopping hosts" do
     test_root =
       Path.join(
@@ -1025,7 +1024,4 @@ defmodule SymphonyElixir.CoreTest do
       File.rm_rf(test_root)
     end
   end
-
-
-
 end

@@ -108,6 +108,8 @@ defmodule SymphonyElixir.TestSupport do
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
           claude_command: "claude -p --permission-mode bypassPermissions",
+          claude_model: nil,
+          claude_add_dirs: [],
           claude_turn_timeout_ms: 3_600_000,
           hook_after_create: nil,
           hook_before_run: nil,
@@ -140,6 +142,8 @@ defmodule SymphonyElixir.TestSupport do
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
     claude_command = Keyword.get(config, :claude_command)
+    claude_model = Keyword.get(config, :claude_model)
+    claude_add_dirs = Keyword.get(config, :claude_add_dirs)
     claude_turn_timeout_ms = Keyword.get(config, :claude_turn_timeout_ms)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
@@ -176,6 +180,8 @@ defmodule SymphonyElixir.TestSupport do
         "  max_concurrent_agents_by_state: #{yaml_value(max_concurrent_agents_by_state)}",
         "claude:",
         "  command: #{yaml_value(claude_command)}",
+        claude_model && "  model: #{yaml_value(claude_model)}",
+        claude_add_dirs != [] && "  add_dirs: #{yaml_value(claude_add_dirs)}",
         "  turn_timeout_ms: #{yaml_value(claude_turn_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
@@ -183,7 +189,7 @@ defmodule SymphonyElixir.TestSupport do
         "---",
         prompt
       ]
-      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.reject(&(&1 in [nil, "", false]))
 
     Enum.join(sections, "\n") <> "\n"
   end

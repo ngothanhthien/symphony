@@ -181,10 +181,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     WorkflowStore.force_reload()
   end
 
-  test "tracker delegates to memory and linear adapters" do
+  test "tracker is read-only: only fetch_* callbacks exist on the public surface" do
     issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue, %{id: "ignored"}])
-    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
 
     assert Config.settings!().tracker.kind == "memory"
@@ -192,20 +191,17 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues()
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
-    assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
-    assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
-    assert_receive {:memory_tracker_comment, "issue-1", "comment"}
-    assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
 
-    Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-    assert :ok = Memory.create_comment("issue-1", "quiet")
-    assert :ok = Memory.update_issue_state("issue-1", "Quiet")
+    refute function_exported?(SymphonyElixir.Tracker, :create_comment, 2)
+    refute function_exported?(SymphonyElixir.Tracker, :update_issue_state, 2)
+    refute function_exported?(Memory, :create_comment, 2)
+    refute function_exported?(Memory, :update_issue_state, 2)
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
     assert SymphonyElixir.Tracker.adapter() == Adapter
   end
 
-  test "linear adapter delegates reads and validates mutation responses" do
+  test "linear adapter is read-only: only fetch_* callbacks and no mutation strings" do
     Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
 
     assert {:ok, [:candidate]} = Adapter.fetch_candidate_issues()
@@ -217,106 +213,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(["issue-1"])
     assert_receive {:fetch_issue_states_by_ids_called, ["issue-1"]}
 
-    Process.put(
-      {FakeLinearClient, :graphql_result},
-      {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
-    )
+    refute function_exported?(Adapter, :create_comment, 2)
+    refute function_exported?(Adapter, :update_issue_state, 2)
 
-    assert :ok = Adapter.create_comment("issue-1", "hello")
-    assert_receive {:graphql_called, create_comment_query, %{body: "hello", issueId: "issue-1"}}
-    assert create_comment_query =~ "commentCreate"
-
-    Process.put(
-      {FakeLinearClient, :graphql_result},
-      {:ok, %{"data" => %{"commentCreate" => %{"success" => false}}}}
-    )
-
-    assert {:error, :comment_create_failed} =
-             Adapter.create_comment("issue-1", "broken")
-
-    Process.put({FakeLinearClient, :graphql_result}, {:error, :boom})
-
-    assert {:error, :boom} = Adapter.create_comment("issue-1", "boom")
-
-    Process.put({FakeLinearClient, :graphql_result}, {:ok, %{"data" => %{}}})
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "weird")
-
-    Process.put({FakeLinearClient, :graphql_result}, :unexpected)
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "odd")
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
-      ]
-    )
-
-    assert :ok = Adapter.update_issue_state("issue-1", "Done")
-    assert_receive {:graphql_called, state_lookup_query, %{issueId: "issue-1", stateName: "Done"}}
-    assert state_lookup_query =~ "states"
-
-    assert_receive {:graphql_called, update_issue_query, %{issueId: "issue-1", stateId: "state-1"}}
-
-    assert update_issue_query =~ "issueUpdate"
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
-      ]
-    )
-
-    assert {:error, :issue_update_failed} =
-             Adapter.update_issue_state("issue-1", "Broken")
-
-    Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
-
-    assert {:error, :boom} = Adapter.update_issue_state("issue-1", "Boom")
-
-    Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
-    assert {:error, :state_not_found} = Adapter.update_issue_state("issue-1", "Missing")
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        {:ok, %{"data" => %{}}}
-      ]
-    )
-
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Weird")
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        :unexpected
-      ]
-    )
-
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+    adapter_source = File.read!("lib/symphony_elixir/linear/adapter.ex")
+    refute adapter_source =~ "mutation"
+    refute adapter_source =~ "commentCreate"
+    refute adapter_source =~ "issueUpdate"
+    refute adapter_source =~ "resolve_state_id"
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do

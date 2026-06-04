@@ -28,13 +28,16 @@ defmodule SymphonyElixir.Claude.Sandbox do
       args =
         [
           "-p",
-          "--input-format", "stream-json",
-          "--output-format", "stream-json",
+          "--input-format",
+          "stream-json",
+          "--output-format",
+          "stream-json",
           "--replay-user-messages",
           "--include-partial-messages",
           "--verbose",
           "--bare",
-          "--permission-mode", "bypassPermissions"
+          "--permission-mode",
+          "bypassPermissions"
         ]
         |> Kernel.++(session_flag)
         |> append_optional("--model", claude_settings.model)
@@ -44,7 +47,7 @@ defmodule SymphonyElixir.Claude.Sandbox do
       spec = %{
         binary: binary,
         args: args,
-        env: %{"LINEAR_API_KEY" => settings.tracker.api_key || ""},
+        env: agent_env(),
         cd: workspace
       }
 
@@ -52,12 +55,29 @@ defmodule SymphonyElixir.Claude.Sandbox do
     end
   end
 
+  # Symphony is read-only: never pass Linear write credentials to Claude.
+  # The Claude process runs with `--permission-mode bypassPermissions`, so any
+  # token in its environment is effectively unrestricted — the prompt alone
+  # would not be a hard boundary. We start from a minimal env and never
+  # inherit `LINEAR_API_KEY` / `LINEAR_API_TOKEN` even if a parent shell set
+  # them, by explicitly overriding them to an empty string.
+  defp agent_env do
+    %{
+      "PATH" => System.get_env("PATH") || "",
+      "HOME" => System.get_env("HOME") || "",
+      "LINEAR_API_KEY" => "",
+      "LINEAR_API_TOKEN" => ""
+    }
+  end
+
   # `opts` may carry `:resume` (continue an existing session) or `:session_id`
   # (force a specific id). If both are absent we omit the flag entirely and
   # let `claude` pick its own id. `:resume` takes precedence over `:session_id`.
   defp session_flag(opts) do
     case Keyword.get(opts, :resume) do
-      id when is_binary(id) and id != "" -> ["--resume", id]
+      id when is_binary(id) and id != "" ->
+        ["--resume", id]
+
       _ ->
         case Keyword.get(opts, :session_id) do
           id when is_binary(id) and id != "" -> ["--session-id", id]

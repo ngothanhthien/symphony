@@ -458,6 +458,74 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
+  test "linear client graphql/3 rejects mutation and subscription operations" do
+    mutation = "mutation SymphonyWrite { issueUpdate(id: \"x\", input: {}) { success } }"
+    subscription = "subscription SymphonySub { issueUpdates { id } }"
+    indented_mutation = "  mutation SymphonyWrite { commentCreate(input: {}) { success } }"
+
+    request_fun = fn _payload, _headers -> flunk("request_fun must not be invoked for blocked operations") end
+
+    assert {:error, :linear_write_operation_blocked} =
+             Client.graphql(mutation, %{}, request_fun: request_fun)
+
+    assert {:error, :linear_write_operation_blocked} =
+             Client.graphql(subscription, %{}, request_fun: request_fun)
+
+    assert {:error, :linear_write_operation_blocked} =
+             Client.graphql(indented_mutation, %{}, request_fun: request_fun)
+  end
+
+  test "linear client graphql/3 rejects mutation preceded by comments or fragments" do
+    request_fun = fn _payload, _headers -> flunk("request_fun must not be invoked for blocked operations") end
+
+    mutation_after_comment = """
+    # this is an explanatory comment
+    mutation SymphonyWrite { issueUpdate(id: "x", input: {}) { success } }
+    """
+
+    fragment_then_mutation = """
+    fragment IssueFields on Issue { id }
+    mutation SymphonyWrite { issueUpdate(id: "x", input: {}) { success } }
+    """
+
+    indented_block_mutation = """
+    query SymphonyRead { viewer { id } }
+
+    mutation SymphonyWrite { commentCreate(input: {}) { success } }
+    """
+
+    subscription_after_comment = """
+    # comment
+    subscription SymphonySub { issueUpdates { id } }
+    """
+
+    for body <- [mutation_after_comment, fragment_then_mutation, indented_block_mutation, subscription_after_comment] do
+      assert {:error, :linear_write_operation_blocked} =
+               Client.graphql(body, %{}, request_fun: request_fun),
+             "expected #{inspect(body)} to be blocked"
+    end
+  end
+
+  test "linear client graphql/3 still allows pure read queries with comments and fragments" do
+    request_fun = fn payload, _headers ->
+      send(self(), {:graphql_request, payload})
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{"data" => %{"viewer" => %{"id" => "u-1"}}}
+       }}
+    end
+
+    query_with_comment = """
+    # leading comment
+    query SymphonyRead { viewer { id } }
+    """
+
+    assert {:ok, _} = Client.graphql(query_with_comment, %{}, request_fun: request_fun)
+    assert_received {:graphql_request, _payload}
+  end
+
   test "orchestrator sorts dispatch by priority then oldest created_at" do
     issue_same_priority_older = %Issue{
       id: "issue-old-high",

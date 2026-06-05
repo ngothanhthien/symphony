@@ -70,5 +70,5 @@ Expected: poll picks up `ENG-5` → Claude spawns → does the file work → mov
 
 - Don't recreate `codex/`. The transport module is `SymphonyElixir.Claude.AppServer`, period.
 - The Claude CLI flags used: `-p --input-format stream-json --output-format stream-json --replay-user-messages --include-partial-messages --verbose --bare --permission-mode bypassPermissions [--session-id <uuid>|--resume <uuid>]`.
-- Bash helpers live at `bin/symphony-claude-tools/{linear-graphql,linear-update-issue,linear-add-comment}`.
+- The only bash helper that remains at `bin/symphony-claude-tools/` is `linear-graphql` (read-only — see its docstring for the mutation guard). All Linear writes are routed through `scripts/bin/harness-cli` in the Harness project, not in Symphony.
 - The session-id persists to `<workspace>/.symphony/claude-session.json` for resume; wiped on terminal state.

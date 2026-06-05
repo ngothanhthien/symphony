@@ -192,25 +192,29 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
-  # Symphony is read-only. Reject any operation whose first non-whitespace
-  # token is `mutation` or `subscription` so a future caller cannot
-  # silently write to Linear through this client.
+  # Symphony is read-only. Reject any document that contains a `mutation`
+  # or `subscription` operation so a future caller cannot silently write to
+  # Linear through this client.
   #
   # We strip `#`-style line comments first because GraphQL permits them
-  # before the operation definition:
+  # anywhere, including before the operation definition:
   #
   #     # explanatory comment
   #     mutation Bad { issueUpdate(...) { success } }
   #
-  # Fragments at the top level are a separate, ambiguous case; treat the
-  # whole document as a write if a mutation or subscription definition
-  # appears after the leading fragments.
+  # The match is bounded on both sides so it is precise:
+  #
+  #   * Left: not a word character (so `mutationLog` is not flagged) and
+  #     either the start of the document or any non-word separator.
+  #   * Right: whitespace or the opening brace of the selection set (so
+  #     `mutation{...}` with no space is still caught).
+  #
+  # The regex matches anywhere in the comment-stripped document, which
+  # also catches a write that follows a leading query or fragment.
   defp graphql_write_operation?(query) when is_binary(query) do
-    if has_write_operation?(strip_graphql_comments(query)) do
-      true
-    else
-      has_write_operation_after_fragments?(query)
-    end
+    query
+    |> strip_graphql_comments()
+    |> String.match?(~r/(^|[^A-Za-z0-9_])(mutation|subscription)(?=\s|\{)/i)
   end
 
   defp graphql_write_operation?(_query), do: true
@@ -218,22 +222,7 @@ defmodule SymphonyElixir.Linear.Client do
   defp strip_graphql_comments(query) when is_binary(query) do
     query
     |> String.split(["\r\n", "\n"])
-    |> Enum.map(&String.replace(&1, ~r/#.*$/, ""))
-    |> Enum.join("\n")
-  end
-
-  defp has_write_operation?(text) when is_binary(text) do
-    text
-    |> String.trim_leading()
-    |> String.match?(~r/^(mutation|subscription)\b/)
-  end
-
-  # A document may begin with fragment definitions (or a query) before a
-  # write operation. We treat the document as a write if any line starts
-  # with `mutation` or `subscription` after leading whitespace, even if
-  # fragments precede it. This is conservative on purpose.
-  defp has_write_operation_after_fragments?(query) when is_binary(query) do
-    String.match?(query, ~r/(^|\n)\s*(mutation|subscription)\b/)
+    |> Enum.map_join("\n", &String.replace(&1, ~r/#.*$/, ""))
   end
 
   @doc false

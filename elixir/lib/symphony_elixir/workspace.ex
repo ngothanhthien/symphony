@@ -258,15 +258,7 @@ defmodule SymphonyElixir.Workspace do
         :ok
 
       command ->
-        script =
-          [
-            remote_shell_assign("workspace", workspace),
-            "if [ -d \"$workspace\" ]; then",
-            "  cd \"$workspace\"",
-            "  #{command}",
-            "fi"
-          ]
-          |> Enum.join("\n")
+        script = build_remote_hook_script(workspace, command)
 
         run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms)
         |> case do
@@ -298,7 +290,18 @@ defmodule SymphonyElixir.Workspace do
 
     task =
       Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+        # Symphony is read-only. The hook inherits the parent process's
+        # environment, which on a developer host or in a deployed worker
+        # may include LINEAR_API_KEY / LINEAR_API_TOKEN. We strip both
+        # before running the hook so an `after_create` script like
+        # `git clone` cannot accidentally reach Linear through the
+        # inherited credential. The hook runs as `sh -lc`, which means
+        # a `~/.bashrc` that re-exports the variable would undo this
+        # — the read-only boundary is enforced upstream in
+        # `Claude.Sandbox` and `Linear.Client`; this is defense in
+        # depth, not a primary boundary.
+        scrubbed_command = "unset LINEAR_API_KEY LINEAR_API_TOKEN; " <> command
+        System.cmd("sh", ["-lc", scrubbed_command], cd: workspace, stderr_to_stdout: true)
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -319,7 +322,12 @@ defmodule SymphonyElixir.Workspace do
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host}")
 
-    case run_remote_command(worker_host, "cd #{shell_escape(workspace)} && #{command}", timeout_ms) do
+    # Same defense in depth for remote hooks: prefix the script with
+    # `unset` so the remote shell does not see a Linear token that the
+    # SSH environment may have inherited from the Symphony host.
+    scrubbed_command = build_remote_hook_script(workspace, command)
+
+    case run_remote_command(worker_host, scrubbed_command, timeout_ms) do
       {:ok, cmd_result} ->
         handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
@@ -329,6 +337,18 @@ defmodule SymphonyElixir.Workspace do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Build a remote hook script with the same env scrub used for the
+  # generic `run_hook/5` remote branch and the `before_remove` remote
+  # branch. Centralized so a future hook path cannot drift away from
+  # the `unset LINEAR_API_KEY LINEAR_API_TOKEN` prefix.
+  defp build_remote_hook_script(workspace, command) when is_binary(workspace) and is_binary(command) do
+    [
+      "unset LINEAR_API_KEY LINEAR_API_TOKEN",
+      "cd #{shell_escape(workspace)} && #{command}"
+    ]
+    |> Enum.join("\n")
   end
 
   defp handle_hook_command_result({_output, 0}, _workspace, _issue_id, _hook_name) do

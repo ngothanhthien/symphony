@@ -506,6 +506,42 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "linear client graphql/3 rejects compact `mutation{` / `subscription{` with no whitespace" do
+    # The operation keyword is a whole word but the next non-comment
+    # character is `{`, not whitespace. The guard matches either boundary.
+    request_fun = fn _payload, _headers -> flunk("request_fun must not be invoked for blocked operations") end
+
+    compact_mutation = "mutation" <> "{ issueUpdate(id: \"x\", input: {}) { success } }"
+    compact_subscription = "subscription" <> "{ issueUpdates { id } }"
+    compact_mutation_after_comment = "# read-only-ish\nmutation" <> "{ commentCreate(input: {}) { success } }\n"
+
+    for body <- [compact_mutation, compact_subscription, compact_mutation_after_comment] do
+      assert {:error, :linear_write_operation_blocked} =
+               Client.graphql(body, %{}, request_fun: request_fun),
+             "expected #{inspect(body)} to be blocked"
+    end
+  end
+
+  test "linear client graphql/3 does not flag identifiers that merely contain the keyword" do
+    # `mutationLog` is a field name, not an operation. The left boundary
+    # is a non-word character only, so a keyword embedded in a longer
+    # identifier does not match.
+    request_fun = fn payload, _headers ->
+      send(self(), {:graphql_request, payload})
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{"data" => %{"viewer" => %{"id" => "u-1"}}}
+       }}
+    end
+
+    query_with_keyword_in_field = "query Q { mutationLog(id: \"x\") { id } }"
+
+    assert {:ok, _} = Client.graphql(query_with_keyword_in_field, %{}, request_fun: request_fun)
+    assert_received {:graphql_request, _payload}
+  end
+
   test "linear client graphql/3 still allows pure read queries with comments and fragments" do
     request_fun = fn payload, _headers ->
       send(self(), {:graphql_request, payload})
@@ -860,8 +896,154 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "echo before-remove"
       assert trace =~ "rm -rf"
       assert trace =~ workspace_path
+
+      # Defense in depth: every remote hook (before_run, after_run,
+      # before_remove) must prefix `unset LINEAR_API_KEY LINEAR_API_TOKEN`
+      # so a Linear token that the SSH environment may have inherited
+      # from the Symphony host cannot reach the hook script. The shell
+      # `&&` joins in `run_hook/5` and the newline-joined script in
+      # `maybe_run_before_remove_hook/2` both go through the same
+      # `build_remote_hook_script/2` helper, so we expect the prefix on
+      # every hook invocations.
+      occurrences =
+        trace
+        |> String.split("\n", trim: true)
+        |> Enum.count(&String.contains?(&1, "unset LINEAR_API_KEY LINEAR_API_TOKEN"))
+
+      assert occurrences >= 3,
+             "expected at least 3 unset prefixes (before_run, after_run, before_remove), got #{occurrences}\n--- trace ---\n#{trace}"
     after
       File.rm_rf(test_root)
     end
+  end
+
+  test "remote before_remove hook strips Linear token via shared scrubbed-script builder" do
+    # Targeted regression: the `before_remove` remote branch previously
+    # built its own script and bypassed `run_hook/5`, so it missed the
+    # `unset` prefix. The fix routes it through the same
+    # `build_remote_hook_script/2` helper, and this test asserts that
+    # the resulting SSH argv contains the prefix *for the before_remove
+    # call specifically*, not just for `run_*_hook/3` calls.
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-remote-before-remove-#{System.unique_integer([:positive])}"
+      )
+
+    previous_path = System.get_env("PATH")
+    previous_trace = System.get_env("SYMP_TEST_SSH_TRACE")
+
+    on_exit(fn ->
+      restore_env("PATH", previous_path)
+      restore_env("SYMP_TEST_SSH_TRACE", previous_trace)
+    end)
+
+    try do
+      trace_file = Path.join(test_root, "ssh.trace")
+      fake_ssh = Path.join(test_root, "ssh")
+      workspace_root = "~/.symphony-remote-workspaces"
+
+      File.mkdir_p!(test_root)
+      System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
+      System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+
+      File.write!(fake_ssh, """
+      #!/bin/sh
+      trace_file="${SYMP_TEST_SSH_TRACE:-/tmp/symphony-fake-ssh.trace}"
+      printf 'ARGV:%s\\n' "$*" >> "$trace_file"
+
+      case "$*" in
+        *"__SYMPHONY_WORKSPACE__"*)
+          printf '%s\\t%s\\t%s\\n' '__SYMPHONY_WORKSPACE__' '0' '/remote/home/.symphony-remote-workspaces/MT-BR-SSH'
+          ;;
+      esac
+
+      exit 0
+      """)
+
+      File.chmod!(fake_ssh, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_ssh_hosts: ["worker-02:2200"],
+        hook_before_remove: "echo before-remove-marker"
+      )
+
+      # `remove_issue_workspaces/2` with a worker_host and identifier
+      # goes: path lookup → `remove(workspace, worker_host)` →
+      # `maybe_run_before_remove_hook/2` (which now uses
+      # `build_remote_hook_script/2`) → the `rm -rf` script. The
+      # workspace directory does not exist on the fake ssh, so the
+      # cleanup script's `rm -rf` is a no-op; the hook still runs.
+      :ok = Workspace.remove_issue_workspaces("MT-BR-SSH", "worker-02:2200")
+
+      trace = File.read!(trace_file)
+
+      # The remote `before_remove` hook's SSH argv contains a multi-
+      # line script body. We assert two things in the same argv: the
+      # `unset LINEAR_API_KEY LINEAR_API_TOKEN` scrub prefix, and the
+      # hook marker, with the scrub preceding the marker. Splitting on
+      # `ARGV:` gives us per-invocation chunks; within each chunk the
+      # first newline is the boundary between the `ssh ...` argv and
+      # the embedded script body, and the script body is the substring
+      # after that boundary.
+      argv_chunks = String.split(trace, "ARGV:")
+
+      before_remove_chunk =
+        Enum.find(argv_chunks, &(String.contains?(&1, "before-remove-marker")))
+
+      assert is_binary(before_remove_chunk),
+             "expected an SSH argv chunk for the remote before_remove hook, got:\n#{trace}"
+
+      # Drop the `ssh -p 2200 host bash -lc '` prefix and the trailing
+      # closing single quote; everything between is the script body
+      # as the remote shell will see it.
+      [_ssh_invocation, body] = String.split(before_remove_chunk, "'", parts: 2, trim: false)
+
+      # The shared helper must prefix the script with `unset ...` so
+      # the remote shell never sees a Linear token from the SSH env.
+      assert body =~ "unset LINEAR_API_KEY LINEAR_API_TOKEN",
+             "remote before_remove hook must scrub LINEAR_API_KEY, got body:\n#{body}"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "local workspace hook never sees parent LINEAR_API_KEY or LINEAR_API_TOKEN" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-hook-env-#{System.unique_integer([:positive])}"
+      )
+
+    env_dump = Path.join(test_root, "hook-env.txt")
+    workspace_root = Path.join(test_root, "workspaces")
+
+    previous_key = System.get_env("LINEAR_API_KEY")
+    previous_token = System.get_env("LINEAR_API_TOKEN")
+    System.put_env("LINEAR_API_KEY", "hook-leak-key")
+    System.put_env("LINEAR_API_TOKEN", "hook-leak-token")
+    on_exit(fn ->
+      restore_env("LINEAR_API_KEY", previous_key)
+      restore_env("LINEAR_API_TOKEN", previous_token)
+      File.rm_rf(test_root)
+    end)
+
+    File.mkdir_p!(workspace_root)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_root: workspace_root,
+      hook_after_create: "env > \"#{env_dump}\""
+    )
+
+    assert {:ok, _workspace} = Workspace.create_for_issue("MT-HOOK-ENV")
+    assert File.exists?(env_dump), "hook did not run"
+
+    captured = File.read!(env_dump) |> String.split("\n", trim: true)
+    refute Enum.any?(captured, &String.contains?(&1, "hook-leak-key")),
+           "hook should not see parent LINEAR_API_KEY"
+
+    refute Enum.any?(captured, &String.contains?(&1, "hook-leak-token")),
+           "hook should not see parent LINEAR_API_TOKEN"
   end
 end

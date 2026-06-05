@@ -148,3 +148,26 @@ Claude process. The orchestrator will not help you.
   cannot slip through as a no-op.
 - Editing `WORKFLOW.harness-claude-runner.md` to remove the
   `harness-cli`-only policy. (Layer 5.)
+- Bringing back a Linear *write* tool under
+  `bin/symphony-claude-tools/` (e.g. `linear-add-comment`,
+  `linear-update-issue`). The repo only ships a read-only
+  `linear-graphql` helper with a mutation/subscription guard at the
+  script level (`bin/tests/linear-graphql_test.sh` covers the guard).
+  Any new write helper is itself a boundary violation.
+- Reintroducing `LINEAR_API_KEY` into a workspace hook's environment.
+  `Workspace.run_hook/5` now `unset LINEAR_API_KEY LINEAR_API_TOKEN`
+  before running both the local and remote hook scripts, and
+  `workspace_and_config_test.exs` exercises the local path. The
+  remote `before_remove` hook is covered by the same regression test
+  — it routes through the shared `build_remote_hook_script/2` helper
+  so the scrub cannot be accidentally dropped in one branch but not
+  the other.
+- Weakening the read-only guard so it fails to match a write that
+  lacks the canonical whitespace before the selection set
+  (e.g. `mutation{...}` with no space). `Linear.Client.graphql/3`
+  uses a single comment-stripped regex with a `(?=\s|\{)` lookahead
+  on the right, and `bin/symphony-claude-tools/linear-graphql` uses
+  the equivalent `[[:space:]]|\{` boundary in `grep -E`. Both are
+  covered by regression tests that probe the compact form, and the
+  shell test also covers identifiers that merely contain the
+  keyword (`mutationLog`).

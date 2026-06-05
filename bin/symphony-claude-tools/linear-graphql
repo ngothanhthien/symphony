@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# linear-graphql — Execute a raw GraphQL query or mutation against Linear.
+# linear-graphql — Execute a read-only GraphQL query against Linear.
 #
 # Usage:
 #   linear-graphql --query "<GraphQL string>" [--vars '<json object>']
@@ -15,10 +15,19 @@
 #   3 — LINEAR_API_KEY missing
 #   4 — request failed before a Linear response
 #   5 — Linear returned one or more GraphQL errors
+#   6 — blocked write operation (mutation or subscription)
 #
 # Environment:
 #   LINEAR_API_KEY        — required. Personal API token (linapi_...).
 #   LINEAR_API_URL        — optional. Override the GraphQL endpoint.
+#
+# Read-only enforcement:
+#   This script mirrors the Elixir `SymphonyElixir.Linear.Client.graphql/3`
+#   guard: any document that contains a `mutation` or `subscription`
+#   operation (after stripping `#` line comments, and across any leading
+#   fragments or queries) is rejected with exit code 6 and a stderr
+#   message. Symphony is read-only orchestration — Linear writes belong
+#   to the Harness CLI (`scripts/bin/harness-cli`), not here.
 
 set -euo pipefail
 
@@ -26,7 +35,7 @@ usage() {
   cat <<'EOF'
 Usage: linear-graphql --query "<GraphQL>" [--vars '<json>']
 
-Execute a GraphQL query or mutation against the Linear API.
+Execute a read-only GraphQL query against the Linear API.
 
 Options:
   --query <text>   GraphQL document (required).
@@ -39,6 +48,7 @@ Exit codes:
   3  LINEAR_API_KEY missing
   4  network/transport error
   5  GraphQL errors
+  6  blocked write operation (mutation / subscription)
 EOF
 }
 
@@ -74,6 +84,24 @@ if ! echo "$vars" | jq -e 'type == "object"' >/dev/null 2>&1; then
   echo "--vars must be a JSON object." >&2
   exit 2
 fi
+
+# --- Read-only guard -------------------------------------------------------
+# Reject any document that contains a `mutation` or `subscription` operation.
+# We strip `#` line comments first (GraphQL permits them anywhere) and then
+# match the operation keyword as a whole word bounded on both sides: the
+# left must not be a word character (so a leading `fmutation` does not
+# match), and the right must be whitespace or the opening brace of the
+# selection set (so `mutation{...}` with no space is still caught — the
+# boundary character we really care about is the `{`, not whitespace).
+# A leading fragment or query before a write is also caught, because the
+# regex matches anywhere in the document.
+stripped_query="$(printf '%s' "$query" | sed -E 's/#.*$//')"
+if printf '%s' "$stripped_query" | grep -Eiq '(^|[^[:alnum:]_])(mutation|subscription)([[:space:]]|\{)'; then
+  echo "Linear write operations are blocked; Symphony is read-only." >&2
+  echo "Use scripts/bin/harness-cli for any Linear write (comment, status, etc.)." >&2
+  exit 6
+fi
+# --- /Read-only guard ------------------------------------------------------
 
 api_url="${LINEAR_API_URL:-https://api.linear.app/graphql}"
 

@@ -142,7 +142,7 @@ defmodule SymphonyElixir.OrchestratorClaudeE2ETest do
 
       Process.sleep(20)
     end)
-    |> Enum.to_list()
+    |> Stream.run()
 
     unless predicate.() do
       raise "assert_wait: predicate never became true within #{timeout_ms}ms"

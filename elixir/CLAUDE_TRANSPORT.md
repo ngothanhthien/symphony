@@ -29,9 +29,10 @@ unchanged.
 - **No fine-grained approval flow.** Claude CLI's `--permission-mode` is
   all-or-nothing. If you need a non-`bypassPermissions` mode, fork the
   transport and add it.
-- **No codex transport.** This branch keeps the codex code in tree for
-  reference but does not exercise it. To run with Codex instead, check out
-  `main`.
+- **No codex transport.** The Codex transport has been removed from this
+  fork. The orchestrator calls `SymphonyElixir.Claude.AppServer` directly
+  (no transport switch). To use Codex, check out `main` before the
+  removal commit.
 
 ## Configuration
 
@@ -66,7 +67,7 @@ workspace:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `agent.transport` | `"codex"` \| `"claude"` | `"codex"` | The orchestrator switches on this. |
+| `agent.transport` | `"claude"` | `"claude"` | Codex transport has been removed in this fork. |
 | `claude.command` | string | `"claude"` | Must be on `PATH` (or absolute path). |
 | `claude.model` | string | (CLI default) | e.g. `sonnet`, `opus`. |
 | `claude.add_dirs` | list of strings | `[]` | Extra `--add-dir` flags. The per-turn workspace is always added automatically. |
@@ -74,35 +75,24 @@ workspace:
 
 ## Helpers
 
-`bin/symphony-claude-tools/` contains three thin Bash wrappers that the agent
-is told (via the system prompt) to call when it needs to touch Linear. They
-all use `jq` + `curl` and have no extra runtime dependencies.
+`bin/symphony-claude-tools/` contains a single read-only Bash wrapper that
+the agent is told (via the system prompt) to call when it needs to read from
+Linear. It uses `jq` + `curl` and has no extra runtime dependencies.
 
 | Script | Purpose |
 |---|---|
-| `linear-graphql --query "<QL>" [--vars '<json>']` | Run a raw GraphQL query/mutation. Prints the `data` field as JSON. |
-| `linear-update-issue --id <uuid> [--state <name>] [--assignee <user>] [--title <text>]` | Update an issue. Resolves state names to ids automatically. |
-| `linear-add-comment --id <uuid> --body "<text>"` | Post a comment. |
+| `linear-graphql --query "<QL>" [--vars '<json>']` | Run a raw GraphQL **query**. Mutations and subscriptions are blocked at the script level. Prints the `data` field as JSON. |
 
 Exit codes: `0` success, `2` bad args, `3` missing `LINEAR_API_KEY`, `4`
-network/HTTP error, `5` GraphQL errors. The agent is expected to inspect
-`$?` and `stderr`.
+network/HTTP error, `5` GraphQL errors, `6` blocked write operation
+(mutation / subscription). The agent is expected to inspect `$?` and `stderr`.
 
-To tell the agent about these helpers, add a section to your `WORKFLOW.md`
-prompt body. For example:
-
-```markdown
-## Available CLI helpers
-
-When you need to touch Linear, call one of these from Bash:
-
-- `bin/symphony-claude-tools/linear-graphql --query "..."`
-- `bin/symphony-claude-tools/linear-update-issue --id <uuid> --state "Done"`
-- `bin/symphony-claude-tools/linear-add-comment --id <uuid> --body "..."`
-
-The `bin/symphony-claude-tools/` directory is on `$PATH` (it's `cwd` for
-each turn) and all scripts respect `LINEAR_API_KEY`.
-```
+> **Symphony is read-only orchestration.** `linear-graphql` is the only
+> Linear read helper that ships with the Symphony repo. Any Linear write
+> (comment, status transition, workpad edit) must be routed through the
+> Harness CLI (`scripts/bin/harness-cli`) in the Harness project, not
+> through Symphony. There is intentionally no `linear-add-comment` or
+> `linear-update-issue` script in this repo.
 
 ## Security
 
@@ -161,7 +151,9 @@ mise exec -- ./bin/symphony ./WORKFLOW.md \
   --i-understand-that-this-will-be-running-without-the-usual-guardrails
 ```
 
-The `--i-understand-...` flag is the same one the Codex transport requires.
+The `--i-understand-...` flag is the same one `symphony` has always required
+when run without the usual guardrails. It is checked before spawning
+`Claude.AppServer`.
 
 ## Files
 
@@ -172,8 +164,8 @@ The `--i-understand-...` flag is the same one the Codex transport requires.
 | `elixir/lib/symphony_elixir/claude/session_store.ex` | Read/write `<workspace>/.symphony/claude-session.json` atomically. |
 | `elixir/lib/symphony_elixir/claude/stream.ex` | Line-buffered JSON stream reader. |
 | `elixir/lib/symphony_elixir/claude/app_server.ex` | Public API (start_session, run_turn, stop_session, run). |
-| `elixir/lib/symphony_elixir/agent_runner.ex` | Picks `Codex.AppServer` or `Claude.AppServer` based on `agent.transport`. Wipes Claude session store on terminal/error. |
-| `elixir/lib/symphony_elixir/config/schema.ex` | New `agent.transport` field + `claude` schema block. |
+| `elixir/lib/symphony_elixir/agent_runner.ex` | Calls `Claude.AppServer` directly (the Codex transport has been removed). Wipes the Claude session store on terminal/error. |
+| `elixir/lib/symphony_elixir/config/schema.ex` | `claude` schema block; the `agent.transport` field is now `"claude"`-only. |
 | `bin/symphony-claude-tools/linear-*` | Bash helpers the agent calls. |
 
 ## Limitations and known issues

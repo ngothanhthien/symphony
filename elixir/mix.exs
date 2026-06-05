@@ -83,7 +83,12 @@ defmodule SymphonyElixir.MixProject do
     [
       setup: ["deps.get"],
       build: ["escript.build"],
-      lint: ["specs.check", "credo --strict"]
+      # `prompt.lint` is included because the workflow markdown is part
+      # of the orchestrator's read-only boundary: it is the contract
+      # that tells Claude "do not write to Linear directly". A
+      # regression in that file would silently re-open a write path,
+      # so we want CI to fail loudly on it.
+      lint: ["specs.check", "prompt.lint", "credo --strict"]
     ]
   end
 

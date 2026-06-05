@@ -50,12 +50,15 @@ Description:
 Instructions:
 1. Read the issue carefully.
 2. Use the Bash tool to do the work in this workspace.
-3. When done, use `bin/symphony-claude-tools/linear-update-issue --id <issue-id> --state "Done"` to mark it Done.
-4. Post a brief comment with `bin/symphony-claude-tools/linear-add-comment --id <issue-id> --body "..."` summarizing what you did.
+3. Symphony is read-only orchestration. All Linear writes (status transitions,
+   comments) must go through `./scripts/bin/harness-cli` (the Harness CLI).
+   Symphony itself does not write to Linear, and your Claude process does not
+   receive the Linear API token. There is no soft-policy fallback: if you
+   cannot go through Harness, you cannot write to Linear.
+4. When done, use `./scripts/bin/harness-cli issue transition --issue {{ issue.identifier }} --state "Done"` to mark it Done.
+5. Record a brief proof/completion through Harness.
 
-Available helpers (run from the workspace root):
-- `bin/symphony-claude-tools/linear-graphql --query "..." [--vars '{...}']`
-- `bin/symphony-claude-tools/linear-update-issue --id <uuid> --state "Done"`
-- `bin/symphony-claude-tools/linear-add-comment --id <uuid> --body "..."`
+Available read helpers (run from the workspace root):
+- `bin/symphony-claude-tools/linear-graphql --query "..." [--vars '{...}']` — read-only GraphQL executor. Mutations and subscriptions are blocked.
 
 The workspace is the current directory. The repo is already cloned there (or this is a fresh dir if no hook was needed).
